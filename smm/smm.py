@@ -336,21 +336,28 @@ class RobustSMM():
         sigma = np.zeros((y.shape[0]))
         if loss == 'baen':
             u = 1 - y * (np.trace(W.T @ X, axis1=1, axis2=2) + b)
-            for i in range(y.shape[0]):
-                if u[i] >= 0:
-                    sigma[i] = lambda_ * (1 - (theta * (u[i] - 1) + 1) / (
-                                eta * (1 + (lambda_ * (theta / 2 * u[i] ** 2 + (1 - theta) * u[i]))) ** 2))
-                else:
-                    sigma[i] = -1 * lambda_ * tau * (1 + (theta * (u[i] + 1) - 1) / (
-                                eta * (1 + (lambda_ * (theta / 2 * u[i] ** 2 - (1 - theta) * u[i]))) ** 2))
-            return sigma
+            u_sq = u ** 2
+            denominator_base = 1 + lambda_ * (theta / 2 * u_sq + (1 - theta) * np.abs(u))
+            denominator = eta * denominator_base ** 2
+
+            mask_pos = u >= 0
+            numerator_pos = theta * (u[mask_pos] - 1) + 1
+            sigma[mask_pos] = lambda_ * (1 - numerator_pos / denominator[mask_pos])
+
+            mask_neg = ~mask_pos
+            numerator_neg = theta * (u[mask_neg] + 1) - 1
+            sigma[mask_neg] = -lambda_ * tau * (1 + numerator_neg / denominator[mask_neg])
         elif loss == 'bsp':
             u = 1 - y * (np.trace(W.T @ X, axis1=1, axis2=2) + b)
-            for i in range(y.shape[0]):
-                if u[i] >= 0:
-                    sigma[i] = lambda_ * (1 - 2 * u / (1 + lambda_ * u ** 2) ** 2)
-                else:
-                    sigma[i] = -1 * lambda_ * tau * (1 + 2 * u / (1 + lambda_ * u ** 2) ** 2)
+            denominator = (1 + lambda_ * u ** 2) ** 2
+
+            mask_pos = u >= 0
+            sigma[mask_pos] = lambda_ * (1 - 2 * u[mask_pos] / denominator[mask_pos])
+
+            mask_neg = ~mask_pos
+            sigma[mask_neg] = -lambda_ * tau * (1 + 2 * u[mask_neg] / denominator[mask_neg])
+
+        return sigma
 
     def SVT(self, M, gamma):
         U, s, Vh = np.linalg.svd(M, full_matrices=False)
@@ -360,32 +367,28 @@ class RobustSMM():
 
     def caculate_g(self, X, y, W, b, eta, lambda_, tau, theta, gamma, loss):
         if loss == 'baen':
-            g1 = 0
-            g2 = 0
-            for i in range(y.shape[0]):
-                u = 1 - y[i] * (np.trace(W.T @ X[i]) + b)
-                g1 += g(u, lambda_, tau)
-                g2 += -1 * h_baen_diff(u, eta, lambda_, tau, theta) * y[i] * (np.trace(W.T @ X[i]) + b)
+            trace_terms = np.trace(W.T@X, axis1=1, axis2=2)
+            u = 1 - y * (trace_terms + b)
+            g1 = np.sum(g(u, lambda_, tau))
+            g2 = np.sum(-h_baen_diff(u, eta, lambda_, tau, theta) * y * (trace_terms + b))
             out = 0.5 * np.trace(W.T @ W) + gamma * np.sum(np.linalg.svd(W, compute_uv=False)) + g1 + g2
             return out
         elif loss == 'bsp':
-            g1 = 0
-            g2 = 0
-            for i in range(y.shape[0]):
-                u = 1 - y[i] * (np.trace(W.T @ X[i]) + b)
-                g1 += g(u, lambda_, tau)
-                g2 += -1 * h_bsp_diff(u, eta, lambda_, tau) * y[i] * (np.trace(W.T @ X[i]) + b)
+            trace_terms = np.trace(W.T @ X, axis1=1, axis2=2)
+            u = 1 - y * (trace_terms + b)
+            g1 = np.sum(g(u, lambda_, tau))
+            g2 = np.sum(-h_bsp_diff(u, eta, lambda_, tau, theta) * y * (trace_terms + b))
             out = 0.5 * np.trace(W.T @ W) + gamma * np.sum(np.linalg.svd(W, compute_uv=False)) + g1 + g2
             return out
 
+
+
     def caculate_f(self, X, y, W, b, eta, lambda_, tau, theta, loss):
-        f = 0
         if loss == 'baen':
-            for i in range(y.shape[0]):
-                u = 1 - y[i] * (np.trace(W.T @ X[i]) + b)
-                f += Baen(u, eta, lambda_, tau, theta)
+            u = 1 - y * (np.trace(W.T @ X, axis1=1, axis2=2) + b)
+            f = np.sum(Baen(u, eta, lambda_, tau, theta))
+            return f
         elif loss == 'bsp':
-            for i in range(y.shape[0]):
-                u = 1 - y[i] * (np.trace(W.T @ X[i]) + b)
-                f += Bsp(u, eta, lambda_, tau)
-        return f
+            u = 1 - y * (np.trace(W.T @ X, axis1=1, axis2=2) + b)
+            f = Bsp(u, eta, lambda_, tau)
+            return f
